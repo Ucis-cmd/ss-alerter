@@ -5,7 +5,7 @@ import tkinter as tk
 from email.message import EmailMessage
 import smtplib
 
-# should return all the listings that are above the last newest listing, instead of only the most newest.
+# add links to listings
 
 SEARCH_INTERVAL = (
     300  # inbox allows only 15 msgs/hour, so every five minutes should be fine
@@ -22,7 +22,7 @@ def init_newest_item(link):
     newest_item = get_first_item(link)
 
 
-def get_first_item(link):
+def get_header_row(link):
     r = requests.get(link)
     soup = BeautifulSoup(r.content, "html.parser")
 
@@ -30,6 +30,11 @@ def get_first_item(link):
     filter_element = soup.find("div", class_="filter_second_line_dv")
     table = filter_element.find_next_sibling("table")
     header_row = table.find("tr", id="head_line")
+    return header_row
+
+
+def get_first_item(link):
+    header_row = get_header_row(link)
     first_item = header_row.find_next_sibling("tr")
 
     return first_item
@@ -39,7 +44,7 @@ def get_data_from_item(item):
     children = item.find_all("td")
     description = children[2].text
     other_data = [item.text for item in children[3:]]
-    return description, other_data
+    return {"description": description, "other_data": other_data}
 
 
 def send_email(content):
@@ -61,30 +66,39 @@ def send_email(content):
 
 
 def get_items_since_last_newest(link):
-    # get the first item, then the next, then the next, etc., until get to last next
-    first_item = get_first_item(link)
-
-    if first_item == newest_item:
-        print("nope")
+    header_row = get_header_row(link)
+    items = header_row.find_next_siblings("tr")
+    if items[0] == newest_item:
+        print("No new items found")
         return
+    try:
+        newest_item_index = [item.get("id") for item in items].index(
+            newest_item.get("id")
+        )
+    except ValueError:
+        # If newest_item is not found, return all items
+        newest_item_index = len(items)
 
-    next_item = first_item.find_next_sibling("tr")
-    item_curr = first_item
-    items_since_newest = [item_curr]
+    # Return all items since the newest_item
+    items_since_newest = items[:newest_item_index]
+    items_since_newest_data = [get_data_from_item(item) for item in items_since_newest]
+    send_email(convert_to_email_text(items_since_newest_data))
 
-    while next_item.get("id") != newest_item.get("id"):
-        item_curr = next_item
-        print(item_curr.get("id"))
-        items_since_newest.append(item_curr)
-        next_item = item_curr.find_next_sibling("tr")
-    print(f"Items since newest ({newest_item.get('id')}):", items_since_newest)
+    print(
+        f"Items since newest ({newest_item.get('id')}):",
+        convert_to_email_text(items_since_newest_data),
+    )
 
 
-def convert_to_email_text(description, data):
+def convert_to_email_text(list_of_dicts):
     separator = ", "
-    text_of_data = separator.join(item for item in data)
-    text = f"Description: {description}, data: {text_of_data}"
-    return text
+    email_body = ""
+    if not isinstance(list_of_dicts, list):
+        list_of_dicts = [list_of_dicts]
+    for dict in list_of_dicts:
+        text_of_data = separator.join(item for item in dict["other_data"])
+        email_body += f"Description: {dict['description']}, data: {text_of_data} \n\n"
+    return email_body
 
 
 def get_newest_item(link):
@@ -94,9 +108,8 @@ def get_newest_item(link):
     # Check if the newest item has changed
     if newest_item != first_item:
         newest_item = first_item
-        description, other_data = get_data_from_item(first_item)
-        send_email(convert_to_email_text(description, other_data))
-        print(f"New item: {newest_item}")
+        # send_email(convert_to_email_text(get_data_from_item(first_item)))
+        print(f"New item: {get_data_from_item(newest_item)}")
 
 
 def loop_function(get_newest_item, get_items_since_last_newest, link, f_stop, interval):
